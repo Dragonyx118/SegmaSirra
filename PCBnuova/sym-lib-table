@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "relè")(type "KiCad")(uri "${KIPRJMOD}/HK4100F-DC5V-SHG.kicad_sym")(options "")(descr ""))
+)

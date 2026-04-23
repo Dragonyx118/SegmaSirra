@@ -1,0 +1,34 @@
+Ref,Val,Package,PosX,PosY,Rot,Side
+"C1","100nF","C_Disc_D5.0mm_W2.5mm_P5.00mm",265.750000,-112.490000,0.000000,top
+"C2","470µF 16V","CP_Radial_D8.0mm_P3.50mm",267.250000,-122.650000,0.000000,top
+"D1","LED","LED_D5.0mm",286.050000,-122.650000,180.000000,top
+"D2","D","D_5KPW_P12.70mm_Horizontal",199.630000,-127.730000,-90.000000,top
+"J1","12V out","TerminalBlock_Phoenix_MKDS-1,5-2_1x02_P5.00mm_Horizontal",237.790000,-110.490000,180.000000,top
+"J2","ScocketEsp32 (1)","PinSocket_1x19_P2.54mm_Vertical",216.750000,-124.530000,0.000000,top
+"J3","ScocketEsp32 (2)","PinSocket_1x19_P2.54mm_Vertical",244.690000,-170.180000,180.000000,top
+"J4","12V in","TerminalBlock_Phoenix_MKDS-1,5-2_1x02_P5.00mm_Horizontal",217.470000,-110.490000,180.000000,top
+"J5","5V out","TerminalBlock_Phoenix_MKDS-1,5-2_1x02_P5.00mm_Horizontal",255.430000,-109.950000,180.000000,top
+"J6","Servo1","PinSocket_1x03_P2.54mm_Vertical",270.750000,-162.950000,0.000000,top
+"J7","Servo2","PinSocket_1x03_P2.54mm_Vertical",276.250000,-162.990000,0.000000,top
+"J8","Umidif1","PinSocket_1x03_P2.54mm_Vertical",164.070000,-150.590000,0.000000,top
+"J9","Umidif2","PinSocket_1x03_P2.54mm_Vertical",164.070000,-163.290000,0.000000,top
+"J10","ConPompLedCOM","TerminalBlock_Phoenix_MKDS-1,5-3_1x03_P5.00mm_Horizontal",287.568000,-149.370000,90.000000,top
+"J11","Conn Vent2","JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical",164.070000,-117.570000,90.000000,top
+"J12","Conn Vent1","JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical",164.070000,-127.730000,90.000000,top
+"J13","FotoConn","PinSocket_1x02_P2.54mm_Vertical",164.070000,-137.890000,0.000000,top
+"J14","ConnSensUltra","PinSocket_1x04_P2.54mm_Vertical",194.550000,-150.590000,0.000000,top
+"J15","SchermoLCDi2C","PinSocket_1x04_P2.54mm_Vertical",290.548000,-125.030000,0.000000,top
+"J16","SensTerreno1","PinSocket_1x03_P2.54mm_Vertical",184.390000,-172.180000,-90.000000,top
+"J17","SensTerreno2","PinSocket_1x03_P2.54mm_Vertical",195.805000,-172.180000,-90.000000,top
+"J18","Pompa 2","TerminalBlock_Phoenix_MKDS-1,5-2_1x02_P5.00mm_Horizontal",202.230000,-110.490000,180.000000,top
+"J19","ConnRelè","TerminalBlock_Phoenix_MKDS-1,5-4_1x04_P5.00mm_Horizontal",287.500000,-170.750000,90.000000,top
+"J20","SHT35","PinSocket_1x04_P2.54mm_Vertical",254.775000,-161.730000,0.000000,top
+"J21","USB_A","PinHeader_1x04_P2.54mm_Vertical",314.100000,-154.450000,90.000000,top
+"Q1","IRLZ44N","TO-220-3_Vertical",189.470000,-127.730000,90.000000,top
+"R1","220 Ohm","R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal",288.530000,-112.490000,180.000000,top
+"R2","100 ohm","R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal",190.740000,-134.080000,-90.000000,top
+"R3","10k Ohm","R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal",181.850000,-138.525000,90.000000,top
+"R4","10kOhm","R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal",176.770000,-142.970000,180.000000,top
+"R5","4,7k / 10k Ohm","R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal",250.500000,-147.720000,-90.000000,top
+"SW1","SW_SPDT","SW_Slide-03_Wuerth-WS-SLTV_10x2.5x6.4_P2.54mm",317.410000,-161.200000,0.000000,top
+"U1","DHT11","Aosong_DHT11_5.5x12.0_P2.54mm",259.402500,-154.492500,180.000000,top
