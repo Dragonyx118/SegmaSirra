@@ -1,5 +1,5 @@
 // ============================================================
-// SegmaFuckingSirra -67.0 V senza delay bloccanti
+// SegmaSirra -6.7 V senza delay bloccanti
 // DEBUG VERSION — ultrasuoni con pulseIn (funzionante) ogni 7s
 // MODIFICA: servo tetto con movimento graduale (~2s) via FreeRTOS
 // ============================================================
