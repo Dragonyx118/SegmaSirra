@@ -17,7 +17,6 @@
 <p align="center">
   <img src="data/img/img04.jpeg" alt="SegmaSirra Main Overview" width="85%" style="border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);">
 </p>
-
 ---
 
 ## 📌 Indice
@@ -37,7 +36,7 @@
 
 ## 🍃 Cos'è SegmaSirra?
 
-**SegmaSirra** è una serra domotica completamente **autosufficiente dal punto di vista energetico**, progettata per ottimizzare la crescita delle piante senza richiedere interventi umani continui.
+**SegmaSirra** è una serra domotica completamente **autosufficiente**, progettata per ottimizzare la crescita delle piante senza richiedere interventi umani continui.
 
 Grazie al microcontrollore **ESP32-WROOM-32** e all'alimentazione integrata da pannello solare a 12V, il sistema analizza costantemente i parametri ambientali (temperatura, umidità del suolo e dell'aria, luminosità) ed esegue azioni correttive automatiche. Tutto l'ecosistema è interfacciato in tempo reale con un'app Android dedicata tramite connessione Wi-Fi.
 
@@ -45,7 +44,7 @@ Grazie al microcontrollore **ESP32-WROOM-32** e all'alimentazione integrata da p
 
 ---
 
-## 📸 Galleria Fotografica
+## 📸 Galleria
 
 <div align="center">
   <table>
