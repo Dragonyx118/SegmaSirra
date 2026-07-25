@@ -51,22 +51,22 @@ Grazie al microcontrollore **ESP32-WROOM-32** e all'alimentazione integrata da p
   <table>
     <tr>
       <td align="center" width="50%">
-        <img src="data/img/img04.jpeg" width="100%" alt="Serra vista principale"/><br />
-        <b>Prototipo Assemblato</b>
+        <img src="data/img/img04.jpeg" width="100%" alt=""/><br />
+        <b></b>
       </td>
       <td align="center" width="50%">
-        <img src="data/img/img01.jpeg" width="100%" alt="Elettronica di controllo" onerror="this.src='data/img/img04.jpeg'"/><br />
-        <b>Box Elettronica & PCB</b>
+        <img src="data/img/img01.jpeg" width="100%" alt="" onerror="this.src='data/img/img04.jpeg'"/><br />
+        <b></b>
       </td>
     </tr>
     <tr>
       <td align="center" width="50%">
-        <img src="data/img/img02.jpeg" width="100%" alt="Sistema di irrigazione" onerror="this.src='data/img/img04.jpeg'"/><br />
-        <b>Pompe & Cisterne Irrigazione</b>
+        <img src="data/img/img02.jpeg" width="100%" alt="" onerror="this.src='data/img/img04.jpeg'"/><br />
+        <b></b>
       </td>
       <td align="center" width="50%">
-        <img src="data/img/img03.jpeg" width="100%" alt="Tetto e Servo motori" onerror="this.src='data/img/img04.jpeg'"/><br />
-        <b>Meccanismo Tetto Apribile</b>
+        <img src="data/img/img03.jpeg" width="100%" alt="" onerror="this.src='data/img/img04.jpeg'"/><br />
+        <b></b>
       </td>
     </tr>
   </table>
