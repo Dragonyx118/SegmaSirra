@@ -1,7 +1,8 @@
 // ============================================================
-// SegmaFuckingSirra -67.0 V senza delay bloccanti
+// SegmaSirra 17.0V senza delay bloccanti
 // DEBUG VERSION — ultrasuoni con pulseIn (funzionante) ogni 7s
 // MODIFICA: servo tetto con movimento graduale (~2s) via FreeRTOS
+// + Integrazione MQTT (LegmaMiteo pattern via Tailscale Funnel) e ArduinoOTA
 // ============================================================
 
 #include <Arduino.h>
@@ -14,8 +15,55 @@
 #include <ArduinoJson.h>
 #include <Adafruit_SHT4x.h>
 #include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <ArduinoOTA.h>
 
 WiFiClientSecure secureClient;
+
+#define MQTT_HOST "legmamiteo-server.tail1c95b4.ts.net"
+#define MQTT_PORT 8443
+const char *SERRA_ID = "serra-001";
+const char *SERRA_MQTT_USER = "serra-esp32";
+const char *SERRA_MQTT_PASSWORD = "9ETvWVXVf2qbT2sy3yOz9XylPwIp8qdo";
+
+const char *MQTT_TOPIC_AUTOMATION = "legmamiteo/automation/serra";
+
+char otaControlTopic[64]; // "serra/<SERRA_ID>/ota/comando", costruito in setup()
+char otaStatusTopic[64];  // "serra/<SERRA_ID>/ota/stato", costruito in setup()
+
+WiFiClientSecure mqttWifiClient;
+PubSubClient mqttClient(mqttWifiClient);
+
+// Forward declaration necessaria: applyAutomationDecisions() (più sotto) la
+// chiama, ma setRoof() è definita fisicamente più avanti nel file (sezione
+// task servo). Senza questa riga il file non compila.
+void setRoof(bool open);
+
+// ------------------------------------------------------------
+// Stato automazione ricevuto da LegmaMiteo
+// ------------------------------------------------------------
+struct AutomationData
+{
+    bool roofShouldClose = false;
+    bool lightsShouldBeOff = false;
+    bool lightningAlert = false;
+    String condition = "sconosciuta";
+    unsigned long lastUpdateMs = 0;
+    bool everReceived = false;
+} automationData;
+
+const unsigned long AUTOMATION_STALE_AFTER_MS = 15UL * 60UL * 1000UL; // 15 minuti
+
+// ------------------------------------------------------------
+// OTA gated via MQTT
+// ------------------------------------------------------------
+const bool OTA_ABILITATO = true;
+const unsigned long OTA_SESSIONE_MAX_MS = 10UL * 60UL * 1000UL; // failsafe 10 minuti
+
+volatile bool modalitaOTARichiesta = false;
+volatile bool otaInCorso = false;
+bool otaInizializzato = false;
+unsigned long otaSessioneIniziataMs = 0;
 
 #define DEBUG_ULTRASUONI true
 #define DEBUG_SENSORI false // debug sensori silenziato
@@ -113,14 +161,10 @@ const unsigned long PULSIN_TIMEOUT_US = 30000;
 const unsigned long PAUSA_TRA_PING_MS = 50;
 
 // --- SERVO TETTO ---
-// Aperto:  servoA (pin 4) = 90°,  servoB (pin 16) = 90°
-// Chiuso:  servoA (pin 4) = 0°,   servoB (pin 16) = 180°
 const int SERVO_A_APERTO = 0;
 const int SERVO_B_APERTO = 180;
 const int SERVO_A_CHIUSO = 90;
 const int SERVO_B_CHIUSO = 90;
-// Durata totale del movimento in ms (~2 secondi).
-// Con 90 step massimi da 1° e SERVO_STEP_DELAY_MS = 22ms -> 90 * 22 = 1980ms ≈ 2s
 const unsigned long SERVO_STEP_DELAY_MS = 22;
 
 // --- PESI MEDIA PONDERATA TEMP/HUM ---
@@ -175,10 +219,8 @@ unsigned long lastWifiCheck = 0;
 bool roofOpen = false;
 
 // --- Task servo: stato condiviso ---
-// servoTargetOpen viene scritto dal loop, letto dal task servo.
-// volatile + SemaphoreHandle per accesso sicuro inter-task.
-volatile bool servoTargetOpen = false; // posizione target richiesta
-volatile bool servoMoving = false;     // true mentre il task sta muovendo
+volatile bool servoTargetOpen = false;
+volatile bool servoMoving = false;
 SemaphoreHandle_t servoMutex = NULL;
 
 #define DHTPIN 5
@@ -197,11 +239,8 @@ const int servoBPin = 16;
 #define LCD_ADDR 0x27
 LiquidCrystal_I2C lcd(LCD_ADDR, 16, 2);
 
-const char* ssid               = "Home&Life SuperWiFi-6CCD";
-const char* password           = "44AMD8347RH7GMB3";
-
-// const char *ssid = "LAPTOP1234";
-// const char *password = "12345678";
+const char *ssid = "Home&Life SuperWiFi-6CCD";
+const char *password = "44AMD8347RH7GMB3";
 
 const char *firebaseCmdUrl = "https://serra-d44cc-default-rtdb.europe-west1.firebasedatabase.app/serra/commands.json";
 const char *firebaseSensorsUrl = "https://serra-d44cc-default-rtdb.europe-west1.firebasedatabase.app/serra/sensors.json";
@@ -226,6 +265,181 @@ struct WiFiSM
     String nuovoSSID = "";
     String nuovaPassword = "";
 } wifiSM;
+
+// ============================================================
+// --- OTA FUNZIONI ---
+// ============================================================
+void setupOTA()
+{
+    ArduinoOTA.setHostname(SERRA_ID);
+    ArduinoOTA
+        .onStart([]()
+                 {
+             otaInCorso = true;
+             String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+             DBG_FB("OTA: inizio aggiornamento %s\n", type.c_str()); })
+        .onEnd([]()
+               { DBG_FB("OTA: completato, riavvio...\n");
+                    otaInCorso = false; })
+        .onProgress([](unsigned int progress, unsigned int total)
+                    {
+             static unsigned long ultimaStampa = 0;
+             if (millis() - ultimaStampa > 2000) {
+                 DBG_FB("OTA: %u%%\n", (progress / (total / 100)));
+                 ultimaStampa = millis();
+             } })
+        .onError([](ota_error_t error)
+                 {
+             otaInCorso = false;
+             DBG_FB("OTA: errore [%u]\n", error); });
+    ArduinoOTA.begin();
+    otaInizializzato = true;
+    DBG_FB("OTA: ArduinoOTA inizializzato e in ascolto\n");
+}
+
+// ============================================================
+// --- CALLBACK MQTT ---
+// ============================================================
+void pubblicaStatoOta(bool attivo)
+{
+    if (!mqttClient.connected()) return;
+    mqttClient.publish(otaStatusTopic, attivo ? "attivo" : "disattivo", true);
+}
+
+void onMqttMessage(char *topic, byte *payload, unsigned int length)
+{
+    if (strcmp(topic, otaControlTopic) == 0)
+    {
+        String msg;
+        msg.reserve(length);
+        for (unsigned int i = 0; i < length; i++)
+            msg += (char)payload[i];
+        msg.trim();
+        msg.toLowerCase();
+
+        bool nuovoStato = (msg == "on" || msg == "1" || msg == "true" || msg == "start");
+        if (nuovoStato != modalitaOTARichiesta)
+        {
+            DBG_FB("OTA: comando ricevuto -> %s\n", nuovoStato ? "ENTRA in modalita' OTA" : "ESCI da modalita' OTA");
+            if (nuovoStato && !otaInizializzato)
+                setupOTA();
+            if (nuovoStato)
+                otaSessioneIniziataMs = millis();
+        }
+        modalitaOTARichiesta = nuovoStato;
+        pubblicaStatoOta(nuovoStato);
+        return;
+    }
+
+    if (strcmp(topic, MQTT_TOPIC_AUTOMATION) == 0)
+    {
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, payload, length);
+        if (err)
+        {
+            DBG_FB("MQTT: errore parsing automazione: %s\n", err.c_str());
+            return;
+        }
+        automationData.roofShouldClose = doc["roof_should_close"] | false;
+        automationData.lightsShouldBeOff = doc["lights_should_be_off"] | false;
+        automationData.lightningAlert = doc["lightning_alert"] | false;
+        automationData.condition = doc["condition"].as<String>();
+        automationData.lastUpdateMs = millis();
+        automationData.everReceived = true;
+        DBG_FB("MQTT: automazione -> roof_close=%d lights_off=%d cond=%s\n",
+               automationData.roofShouldClose, automationData.lightsShouldBeOff,
+               automationData.condition.c_str());
+    }
+}
+
+bool connectMqttLegmamiteo()
+{
+    if (WiFi.status() != WL_CONNECTED)
+        return false;
+    if (mqttClient.connected())
+        return true;
+
+    mqttWifiClient.setInsecure();
+    mqttWifiClient.setTimeout(10000); // evita blocchi lunghi se il broker non risponde
+    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+    mqttClient.setBufferSize(512);
+    mqttClient.setCallback(onMqttMessage);
+
+    DBG_FB("MQTT: connessione a %s:%d...\n", MQTT_HOST, MQTT_PORT);
+    if (mqttClient.connect(SERRA_ID, SERRA_MQTT_USER, SERRA_MQTT_PASSWORD))
+    {
+        DBG_FB("MQTT: connesso\n");
+        pubblicaStatoOta(false); // baseline alla (ri)connessione
+        mqttClient.subscribe(MQTT_TOPIC_AUTOMATION, 1);
+        if (OTA_ABILITATO)
+            mqttClient.subscribe(otaControlTopic, 1);
+        return true;
+    }
+
+    DBG_FB("MQTT: connessione fallita, rc=%d\n", mqttClient.state());
+    return false;
+}
+
+void tickMqttLegmamiteo()
+{
+    if (WiFi.status() != WL_CONNECTED)
+        return;
+
+    if (!mqttClient.connected())
+    {
+        static unsigned long lastRetry = 0;
+        unsigned long now = millis();
+        if (now - lastRetry >= 5000)
+        {
+            lastRetry = now;
+            connectMqttLegmamiteo();
+        }
+        return;
+    }
+    mqttClient.loop();
+
+    if (modalitaOTARichiesta && !otaInCorso &&
+        (millis() - otaSessioneIniziataMs >= OTA_SESSIONE_MAX_MS))
+    {
+        DBG_FB("OTA: timeout di sicurezza raggiunto, esco dalla modalita'\n");
+        modalitaOTARichiesta = false;
+    }
+}
+
+void tickOta()
+{
+    if (modalitaOTARichiesta && otaInizializzato)
+        ArduinoOTA.handle();
+}
+
+bool isAutomationDataFresh()
+{
+    if (!automationData.everReceived)
+        return false;
+    return (millis() - automationData.lastUpdateMs) < AUTOMATION_STALE_AFTER_MS;
+}
+
+// ============================================================
+// --- ARBITRAGGIO TETTO E LUCI ---
+// ============================================================
+void applyAutomationDecisions(bool appRoofOpenRequested, bool appManualOverrideActive)
+{
+    if (isAutomationDataFresh() && automationData.roofShouldClose)
+    {
+        if (roofOpen)
+            setRoof(false);
+        return;
+    }
+
+    if (appRoofOpenRequested != roofOpen)
+        setRoof(appRoofOpenRequested);
+
+    if (isAutomationDataFresh() && !appManualOverrideActive)
+    {
+        bool shouldBeOn = !automationData.lightsShouldBeOff;
+        digitalWrite(luci, shouldBeOn ? HIGH : LOW);
+    }
+}
 
 // ============================================================
 // --- TASK FREERTOS: ULTRASUONI (Core 0) ---
@@ -295,12 +509,6 @@ void taskUltrasuoni(void *param)
 
 // ============================================================
 // --- TASK FREERTOS: SERVO TETTO (Core 1) ---
-//
-// Gira su Core 1 insieme al loop, ma con priorità 2 (loop ha 1).
-// Aspetta una notifica dal loop tramite xTaskNotifyGive().
-// Quando riceve la notifica legge servoTargetOpen e muove i servo
-// gradualmente step da 1° con delay di SERVO_STEP_DELAY_MS ms.
-// Il loop non viene bloccato perché il delay è interno al task.
 // ============================================================
 TaskHandle_t taskServoHandle = NULL;
 
@@ -308,16 +516,13 @@ void taskServo(void *param)
 {
     DBG_ATT("Task servo avviato su Core %d\n", xPortGetCoreID());
 
-    // Posizione corrente stimata (inizializzata su chiuso)
     int posA = SERVO_A_CHIUSO;
     int posB = SERVO_B_CHIUSO;
 
     for (;;)
     {
-        // Aspetta finché il loop chiama xTaskNotifyGive(taskServoHandle)
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        // Leggi target con mutex
         bool targetOpen;
         xSemaphoreTake(servoMutex, portMAX_DELAY);
         targetOpen = servoTargetOpen;
@@ -330,39 +535,30 @@ void taskServo(void *param)
         DBG_ATT("Servo: movimento %s | A: %d->%d  B: %d->%d\n",
                 targetOpen ? "APERTO" : "CHIUSO", posA, targetA, posB, targetB);
 
-        // Calcola quanti step servono (max tra i due servo)
         int stepsA = abs(targetA - posA);
         int stepsB = abs(targetB - posB);
         int steps = max(stepsA, stepsB);
 
         for (int i = 1; i <= steps; i++)
         {
-            // Interpolazione lineare per entrambi i servo
-            // Usa arrotondamento corretto per evitare jitter all'ultimo step
             int newA = posA + (int)roundf((float)(targetA - posA) * i / steps);
             int newB = posB + (int)roundf((float)(targetB - posB) * i / steps);
 
             servoA.write(newA);
             servoB.write(newB);
 
-            // Delay non bloccante per il task (non tocca il loop)
             vTaskDelay(pdMS_TO_TICKS(SERVO_STEP_DELAY_MS));
 
-            // Se nel frattempo è arrivato un nuovo target, interrompi
-            // e lascia che il task riparta con il nuovo valore
             if (ulTaskNotifyTake(pdTRUE, 0) > 0)
             {
-                // Aggiorna posizione corrente al punto dove ci siamo fermati
                 posA = newA;
                 posB = newB;
                 DBG_ATT("Servo: movimento interrotto a step %d/%d (nuovo comando)\n", i, steps);
-                // Re-inserisci la notifica così il for esterno la riceve
                 xTaskNotifyGive(taskServoHandle);
                 goto next_command;
             }
         }
 
-        // Movimento completato: scrivi esattamente il target
         servoA.write(targetA);
         servoB.write(targetB);
         posA = targetA;
@@ -377,21 +573,14 @@ void taskServo(void *param)
     }
 }
 
-// ============================================================
-// --- FUNZIONE HELPER: richiedi movimento tetto ---
-// Chiamala al posto di servoA.write() / servoB.write() diretto.
-// È thread-safe e non bloccante.
-// ============================================================
 void setRoof(bool open)
 {
     xSemaphoreTake(servoMutex, portMAX_DELAY);
     servoTargetOpen = open;
     xSemaphoreGive(servoMutex);
 
-    // Notifica il task servo di muoversi
     xTaskNotifyGive(taskServoHandle);
 
-    // Aggiorna subito lo stato logico (non aspettare il completamento fisico)
     roofOpen = open;
     DBG_ATT("Tetto: richiesta %s\n", open ? "APERTURA" : "CHIUSURA");
 }
@@ -439,14 +628,10 @@ void setup()
                   SERVO_A_APERTO, SERVO_B_APERTO, SERVO_A_CHIUSO, SERVO_B_CHIUSO, SERVO_STEP_DELAY_MS);
     Serial.println("============================================\n");
 
-    // Pin setup
     pinMode(trigPin, OUTPUT);
     pinMode(echoPin, INPUT);
     pinMode(lightPin, INPUT);
     digitalWrite(trigPin, LOW);
-
-    int echoStato = digitalRead(echoPin);
-    Serial.printf("[INIT] echoPin GPIO%d a riposo: %s %s\n", echoPin, echoStato ? "HIGH" : "LOW", echoStato ? "!! ATTENZIONE: dovrebbe essere LOW !!" : "(OK)");
 
     pinMode(umidificatore1, OUTPUT);
     digitalWrite(umidificatore1, LOW);
@@ -461,23 +646,18 @@ void setup()
     pinMode(luci, OUTPUT);
     digitalWrite(luci, LOW);
 
-    // Servo: posizione iniziale CHIUSA (servoA=0, servoB=180)
     servoA.attach(servoAPin);
     servoA.write(SERVO_A_CHIUSO);
     servoB.attach(servoBPin);
     servoB.write(SERVO_B_CHIUSO);
     roofOpen = false;
     servoTargetOpen = false;
-    Serial.printf("[INIT] Servo inizializzati -> tetto CHIUSO (A=%d B=%d)\n",
-                  SERVO_A_CHIUSO, SERVO_B_CHIUSO);
 
     Wire.begin(21, 22);
-    Serial.println("[INIT] I2C avviato su SDA=21 SCL=22");
     scanI2C();
 
     dht.begin();
     dhtReadyAt = millis() + DHT_WARMUP_MS;
-    Serial.printf("[INIT] DHT11 avviato, warmup fino a %lums\n", dhtReadyAt);
 
     if (sht45.begin())
     {
@@ -496,54 +676,26 @@ void setup()
     lcd.backlight();
     lcd.setCursor(0, 0);
     lcd.print("Serra avviata...");
-    Serial.println("[INIT] LCD inizializzato");
-
-    // Test sincrono ultrasuoni all'avvio
-    Serial.println("\n[INIT] === TEST ULTRASUONI SINCRONO ===");
-    Serial.printf("[INIT] Trig=GPIO%d, Echo=GPIO%d\n", trigPin, echoPin);
-    digitalWrite(trigPin, LOW);
-    delayMicroseconds(4);
-    digitalWrite(trigPin, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(trigPin, LOW);
-    long dur = pulseIn(echoPin, HIGH, 30000);
-    if (dur == 0)
-    {
-        Serial.println("[INIT] ULTRASUONI: NESSUN ECHO!");
-        Serial.println("[INIT] -> Verifica cavi, alimentazione 5V, partitore tensione su ECHO");
-    }
-    else
-    {
-        float dist = dur * VELOCITA_SUONO_CM_US / 2.0f;
-        Serial.printf("[INIT] ULTRASUONI: OK! durata=%ldus distanza=%.1fcm\n", dur, dist);
-    }
-    Serial.println("[INIT] ======================================\n");
 
     connectWiFiBlocking();
 
     if (WiFi.status() == WL_CONNECTED)
     {
-        // Forza DNS pubblico (8.8.8.8) mantenendo IP/gateway/subnet da DHCP.
-        // Fix per hotspot Windows ICS che spesso ha un DNS relay inaffidabile.
         bool dnsOk = WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(),
-                                 IPAddress(8, 8, 8, 8), IPAddress(1, 1, 1, 1));
+                                  IPAddress(8, 8, 8, 8), IPAddress(1, 1, 1, 1));
         DBG_WIFI("Riconfigurazione DNS (8.8.8.8/1.1.1.1): %s\n", dnsOk ? "OK" : "FALLITA");
-
-        // Test di risoluzione DNS per confermare
-        IPAddress testIp;
-        bool resolved = WiFi.hostByName("serra-d44cc-default-rtdb.europe-west1.firebasedatabase.app", testIp);
-        DBG_WIFI("Test DNS firebasedatabase.app: %s%s\n",
-                 resolved ? "OK -> " : "FALLITO",
-                 resolved ? testIp.toString().c_str() : "");
     }
 
     secureClient.setInsecure();
     DBG_WIFI("TLS client configurato in modalità insecure\n");
 
-    // Mutex per accesso thread-safe a servoTargetOpen / servoMoving
+    // Inizializzazione topic OTA e connessione broker MQTT LegmaMiteo
+    snprintf(otaControlTopic, sizeof(otaControlTopic), "serra/%s/ota/comando", SERRA_ID);
+    snprintf(otaStatusTopic, sizeof(otaStatusTopic), "serra/%s/ota/stato", SERRA_ID);
+    connectMqttLegmamiteo();
+
     servoMutex = xSemaphoreCreateMutex();
 
-    // Task ultrasuoni su Core 0, priorità 1
     xTaskCreatePinnedToCore(
         taskUltrasuoni,
         "UltrasuoniTask",
@@ -551,12 +703,8 @@ void setup()
         NULL,
         1,
         &taskUltrasuoniHandle,
-        0 // Core 0
-    );
-    Serial.println("[INIT] Task ultrasuoni avviato su Core 0 (priorità 1, intervallo 7s)");
+        0);
 
-    // Task servo su Core 1, priorità 2 (sopra il loop che ha priorità 1)
-    // Stack 2048 è sufficiente: il task fa solo write() e vTaskDelay()
     xTaskCreatePinnedToCore(
         taskServo,
         "ServoTask",
@@ -564,9 +712,7 @@ void setup()
         NULL,
         2,
         &taskServoHandle,
-        1 // Core 1 (stesso del loop)
-    );
-    Serial.println("[INIT] Task servo avviato su Core 1 (priorità 2, graduale ~2s)");
+        1);
     Serial.println("[INIT] Setup completato. Avvio loop.\n");
 }
 
@@ -579,6 +725,8 @@ void loop()
     loopCount++;
 
     tickWiFiSM();
+    tickMqttLegmamiteo();
+    tickOta();
 
     if (now - lastWifiCheck >= INTERVALLO_WIFI_CHECK)
     {
@@ -592,11 +740,6 @@ void loop()
             wifiSM.tentativi = 0;
             wifiSM.tStato = now;
         }
-        else if (WiFi.status() == WL_CONNECTED)
-        {
-            DBG_WIFI("Check OK - IP:%s RSSI:%ddBm heap:%d\n",
-                     WiFi.localIP().toString().c_str(), WiFi.RSSI(), ESP.getFreeHeap());
-        }
     }
 
     if (now - lastSensorRead >= INTERVALLO_SENSORI)
@@ -608,7 +751,6 @@ void loop()
         lastLightPct = constrain(
             (int)((float)(luceRaw - LUCE_MIN) / (LUCE_MAX - LUCE_MIN) * 100.0f),
             0, 100);
-        DBG_SEN("Luce: raw=%d -> %d%%\n", luceRaw, lastLightPct);
     }
 
     if (now - lastDisplayUpdate >= INTERVALLO_LCD)
@@ -619,16 +761,22 @@ void loop()
         printDebugSummary();
     }
 
-    if (now - lastSendData >= INTERVALLO_FIREBASE)
+    // Durante un aggiornamento OTA effettivo (otaInCorso), le chiamate HTTP a
+    // Firebase possono bloccare il loop fino a 5s e far perdere pacchetti
+    // ArduinoOTA: le saltiamo finché il flash non è terminato.
+    if (!otaInCorso)
     {
-        lastSendData = now;
-        sendToFirebase(lastSensorData, lastWaterLevel, lastLightPct);
-    }
+        if (now - lastSendData >= INTERVALLO_FIREBASE)
+        {
+            lastSendData = now;
+            sendToFirebase(lastSensorData, lastWaterLevel, lastLightPct);
+        }
 
-    if (now - lastCommandCheck >= INTERVALLO_COMANDI)
-    {
-        lastCommandCheck = now;
-        readFirebaseCommands();
+        if (now - lastCommandCheck >= INTERVALLO_COMANDI)
+        {
+            lastCommandCheck = now;
+            readFirebaseCommands();
+        }
     }
 
     DBG_LOOP("loop #%lu heap=%d\n", loopCount, ESP.getFreeHeap());
@@ -671,6 +819,10 @@ void printDebugSummary()
                   usAvvii > 0 ? (float)usSuccessi / usAvvii * 100.0f : 0.0f);
     Serial.printf("  WIFI: %s  RSSI:%ddBm\n",
                   WiFi.status() == WL_CONNECTED ? "OK" : "DISCONNESSO", WiFi.RSSI());
+    Serial.printf("  MQTT LegmaMiteo: %s  OTA:%s%s\n",
+                  mqttClient.connected() ? "OK" : "DISCONNESSO",
+                  modalitaOTARichiesta ? "ATTIVA" : "spenta",
+                  otaInCorso ? " (flash in corso)" : "");
     Serial.printf("  FIREBASE: invii=%lu err=%lu\n", fbInvii, fbErrori);
     Serial.printf("  ATTUATORI: pompa=%s umid=%s/%s ventola=%s luci=%s tetto=%s%s\n",
                   digitalRead(pompa2) ? "ON" : "OFF",
@@ -695,15 +847,10 @@ void scanI2C()
         Wire.beginTransmission(addr);
         if (Wire.endTransmission() == 0)
         {
-            Serial.printf("[I2C] Dispositivo trovato a 0x%02X%s%s\n", addr,
-                          (addr == 0x27 || addr == 0x3F) ? " <- LCD" : "",
-                          (addr == 0x44 || addr == 0x45) ? " <- SHT4x" : "");
             trovati++;
         }
     }
     Serial.printf("[I2C] Totale: %d dispositivo/i\n", trovati);
-    if (trovati == 0)
-        Serial.println("[I2C] NESSUNO! Verifica SDA=21 SCL=22");
 }
 
 // ============================================================
@@ -753,26 +900,19 @@ void tickWiFiSM()
             wifiSM.tentativi++;
             if (WiFi.status() == WL_CONNECTED)
             {
-                DBG_WIFI("Riconnesso!\n");
                 WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(),
-                IPAddress(8, 8, 8, 8), IPAddress(1, 1, 1, 1));
+                            IPAddress(8, 8, 8, 8), IPAddress(1, 1, 1, 1));
                 wifiSM.stato = WIFI_OK;
             }
             else if (wifiSM.tentativi >= 20)
             {
-                DBG_WIFI("Riconnessione fallita\n");
                 wifiSM.stato = WIFI_OK;
             }
         }
         break;
     case WIFI_FALLBACK_SCAN:
     {
-        Serial.println("\n=== CONFIGURAZIONE WIFI MANUALE ===");
         int n = WiFi.scanNetworks();
-        for (int i = 0; i < n; i++)
-            Serial.printf("  %d) %s (%ddBm)\n", i + 1,
-                          WiFi.SSID(i).c_str(), WiFi.RSSI(i));
-        Serial.println("Inserisci SSID:");
         wifiSM.stato = WIFI_FALLBACK_WAIT_SSID;
         wifiSM.tStato = now;
         break;
@@ -784,7 +924,6 @@ void tickWiFiSM()
             wifiSM.nuovoSSID.trim();
             if (wifiSM.nuovoSSID.length() > 0)
             {
-                Serial.println("Inserisci password:");
                 wifiSM.stato = WIFI_FALLBACK_WAIT_PASS;
                 wifiSM.tStato = now;
             }
@@ -818,12 +957,10 @@ void tickWiFiSM()
             wifiSM.tentativi++;
             if (WiFi.status() == WL_CONNECTED)
             {
-                DBG_WIFI("Connesso!\n");
                 wifiSM.stato = WIFI_OK;
             }
             else if (wifiSM.tentativi >= 30)
             {
-                DBG_WIFI("Offline\n");
                 wifiSM.stato = WIFI_OK;
             }
         }
@@ -834,10 +971,7 @@ void tickWiFiSM()
 void sendToFirebase(const SensorData &s, float waterLevel, int lightPct)
 {
     if (WiFi.status() != WL_CONNECTED)
-    {
-        DBG_FB("Saltato: WiFi offline (status=%d)\n", WiFi.status());
         return;
-    }
 
     JsonDocument doc;
     if (s.valid)
@@ -858,13 +992,9 @@ void sendToFirebase(const SensorData &s, float waterLevel, int lightPct)
 
     String jsonData;
     serializeJson(doc, jsonData);
-    DBG_FB("PUT %s\n", firebaseSensorsUrl);
-    DBG_FB("Payload -> %s\n", jsonData.c_str());
 
     HTTPClient http;
-    bool began = http.begin(secureClient, firebaseSensorsUrl);
-    DBG_FB("http.begin() = %s\n", began ? "OK" : "FALLITO");
-    if (!began)
+    if (!http.begin(secureClient, firebaseSensorsUrl))
     {
         fbErrori++;
         return;
@@ -872,25 +1002,19 @@ void sendToFirebase(const SensorData &s, float waterLevel, int lightPct)
 
     http.addHeader("Content-Type", "application/json");
     http.setTimeout(5000);
-    unsigned long t0 = millis();
     int code = http.PUT(jsonData);
-    unsigned long dt = millis() - t0;
     fbInvii++;
 
     if (code > 0)
     {
-        DBG_FB("Risposta HTTP%d (%lums)\n", code, dt);
         if (code != 200)
         {
             fbErrori++;
-            DBG_FB("Body errore: %s\n", http.getString().c_str());
         }
     }
     else
     {
         fbErrori++;
-        DBG_FB("ERRORE connessione: %s (code=%d, %lums)\n",
-               http.errorToString(code).c_str(), code, dt);
     }
     http.end();
 }
@@ -948,45 +1072,31 @@ void updateLCD(float umiditaTerreno, float acqua, float temp, float umidita, int
 void readFirebaseCommands()
 {
     if (WiFi.status() != WL_CONNECTED)
-    {
-        DBG_FB("GET saltato: WiFi offline (status=%d)\n", WiFi.status());
         return;
-    }
 
     HTTPClient http;
-    bool began = http.begin(secureClient, firebaseCmdUrl);
-    DBG_FB("http.begin(GET) = %s\n", began ? "OK" : "FALLITO");
-    if (!began)
+    if (!http.begin(secureClient, firebaseCmdUrl))
         return;
 
     http.setTimeout(5000);
-    unsigned long t0 = millis();
     int httpCode = http.GET();
-    unsigned long dt = millis() - t0;
 
     if (httpCode == HTTP_CODE_OK)
     {
         String payload = http.getString();
-        DBG_FB("GET OK (%lums): %s\n", dt, payload.c_str());
         JsonDocument doc;
         DeserializationError err = deserializeJson(doc, payload);
-        if (err)
-        {
-            DBG_FB("Errore parsing JSON: %s\n", err.c_str());
-        }
-        else
+        if (!err)
         {
             if (doc.containsKey("lightOn"))
             {
                 bool on = doc["lightOn"];
                 digitalWrite(luci, on ? HIGH : LOW);
-                DBG_ATT("Luci %s\n", on ? "ON" : "OFF");
             }
-            if (doc.containsKey("roofOpen"))
+            if (doc.containsKey("roofOpen") || doc.containsKey("manualOverride"))
             {
-                bool targetOpen = doc["roofOpen"].as<bool>();
-                if (targetOpen != roofOpen)
-                    setRoof(targetOpen);
+                applyAutomationDecisions(doc["roofOpen"] | roofOpen,
+                                          doc["manualOverride"] | false);
             }
             if (doc.containsKey("irrigationOn"))
             {
@@ -1002,15 +1112,6 @@ void readFirebaseCommands()
             }
         }
     }
-    else if (httpCode > 0)
-    {
-        DBG_FB("GET HTTP%d (%lums)\n", httpCode, dt);
-    }
-    else
-    {
-        DBG_FB("ERRORE connessione GET: %s (code=%d, %lums)\n",
-               http.errorToString(httpCode).c_str(), httpCode, dt);
-    }
     http.end();
 }
 
@@ -1021,8 +1122,6 @@ void startIrrigation(float waterLevel)
 {
     if (waterLevel >= 0 && waterLevel < SOGLIA_ACQUA_MINIMA)
     {
-        DBG_ATT("Irrigazione BLOCCATA: %.1f%% < soglia %.0f%%\n",
-                waterLevel, SOGLIA_ACQUA_MINIMA);
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print("ACQUA ESAURITA");
@@ -1031,39 +1130,30 @@ void startIrrigation(float waterLevel)
         return;
     }
     if (waterLevel < 0)
-    {
-        DBG_ATT("Irrigazione BLOCCATA: livello acqua sconosciuto\n");
         return;
-    }
     digitalWrite(pompa2, HIGH);
-    DBG_ATT("Pompa ON (acqua: %.1f%%)\n", waterLevel);
 }
 void stopIrrigation()
 {
     digitalWrite(pompa2, LOW);
-    DBG_ATT("Pompa OFF\n");
 }
 void startHumidifier()
 {
     digitalWrite(umidificatore1, HIGH);
     digitalWrite(umidificatore2, HIGH);
-    DBG_ATT("Umidificatori ON\n");
 }
 void stopHumidifier()
 {
     digitalWrite(umidificatore1, LOW);
     digitalWrite(umidificatore2, LOW);
-    DBG_ATT("Umidificatori OFF\n");
 }
 void startFan()
 {
     digitalWrite(ventolaSerra, HIGH);
-    DBG_ATT("Ventola ON\n");
 }
 void stopFan()
 {
     digitalWrite(ventolaSerra, LOW);
-    DBG_ATT("Ventola OFF\n");
 }
 
 // ============================================================
@@ -1084,18 +1174,6 @@ SensorData readNewSensors()
         sht45.getEvent(&hev, &tev);
         shtTemp = tev.temperature;
         shtHum = hev.relative_humidity;
-        if (!isnan(shtTemp) && !isnan(shtHum))
-        {
-            DBG_SEN("SHT45: T=%.2f°C H=%.2f%%\n", shtTemp, shtHum);
-        }
-        else
-        {
-            DBG_SEN("SHT45: NaN!\n");
-        }
-    }
-    else
-    {
-        DBG_SEN("SHT45: non disponibile\n");
     }
 
     float tDHT = NAN, hDHT = NAN;
@@ -1103,18 +1181,6 @@ SensorData readNewSensors()
     {
         tDHT = dht.readTemperature();
         hDHT = dht.readHumidity();
-        if (!isnan(tDHT) && !isnan(hDHT))
-        {
-            DBG_SEN("DHT11: T=%.1f°C H=%.1f%%\n", tDHT, hDHT);
-        }
-        else
-        {
-            DBG_SEN("DHT11: NaN! (cavo?)\n");
-        }
-    }
-    else
-    {
-        DBG_SEN("DHT11: warmup %lums rimanenti\n", dhtReadyAt - millis());
     }
 
     bool dhtValido = !isnan(tDHT) && !isnan(hDHT);
@@ -1125,33 +1191,24 @@ SensorData readNewSensors()
         data.temperature = tDHT * PESO_DHT + shtTemp * PESO_SHT;
         data.humidity = hDHT * PESO_DHT + shtHum * PESO_SHT;
         data.valid = true;
-        DBG_SEN("Fonte: media ponderata DHT+SHT -> T=%.1f H=%.1f\n",
-                data.temperature, data.humidity);
     }
     else if (shtValido)
     {
         data.temperature = shtTemp;
         data.humidity = shtHum;
         data.valid = true;
-        DBG_SEN("Fonte: solo SHT45\n");
     }
     else if (dhtValido)
     {
         data.temperature = tDHT;
         data.humidity = hDHT;
         data.valid = true;
-        DBG_SEN("Fonte: solo DHT11\n");
-    }
-    else
-    {
-        DBG_SEN("ERRORE: nessun sensore valido!\n");
     }
 
     int v1 = analogRead(sensoreTerreno);
     int v2 = analogRead(sensoreTerreno2);
     int avg = (v1 + v2) / 2;
     data.soilMoisture = constrain(map(avg, 4095, 0, 0, 100), 0, 100);
-    DBG_SEN("Suolo: raw1=%d raw2=%d avg=%d -> %d%%\n", v1, v2, avg, data.soilMoisture);
 
     return data;
 }
