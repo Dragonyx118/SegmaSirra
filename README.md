@@ -15,7 +15,7 @@
 <br />
 
 <p align="center">
-<img src="data/img/img04.jpeg" alt="SegmaSirra Main Overview" width="85%" style="border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);">
+<img src="resources/img/img04.jpeg" alt="SegmaSirra Main Overview" width="85%" style="border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);">
 </p>
 
 ---
@@ -66,21 +66,21 @@ Il controllo e il monitoraggio remoto della serra avvengono tramite un'applicazi
 <table>
 <tr>
  <td align="center" width="50%">
-   <img src="data/img/img04.jpeg" width="100%" alt=""/><br />
+   <img src="resources/img/img04.jpeg" width="100%" alt=""/><br />
    <b></b>
  </td>
  <td align="center" width="50%">
-   <img src="data/img/img01.jpeg" width="100%" alt="" onerror="this.src='data/img/img04.jpeg'"/><br />
+   <img src="resources/img/img01.jpeg" width="100%" alt="" onerror="this.src='data/img/img04.jpeg'"/><br />
    <b></b>
  </td>
 </tr>
 <tr>
  <td align="center" width="50%">
-   <img src="data/img/img02.jpeg" width="100%" alt="" onerror="this.src='data/img/img04.jpeg'"/><br />
+   <img src="resources/img/img02.jpeg" width="100%" alt="" onerror="this.src='data/img/img04.jpeg'"/><br />
    <b></b>
  </td>
  <td align="center" width="50%">
-   <img src="data/img/img03.jpeg" width="100%" alt="" onerror="this.src='data/img/img04.jpeg'"/><br />
+   <img src="resources/img/img03.jpeg" width="100%" alt="" onerror="this.src='data/img/img04.jpeg'"/><br />
    <b></b>
  </td>
 </tr>
@@ -114,3 +114,4 @@ Il controllo e il monitoraggio remoto della serra avvengono tramite un'applicazi
 | 2x Ventole    |        | Apertura      |        | Monitoraggio  |
 | 2x Pompe 12V  |        | Tetto         |        |  & Comandi    |
 | Luci Notturne |        +---------------+        +---------------+
++---------------+        
